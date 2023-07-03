@@ -14,7 +14,7 @@ const app = createLiteRPC().add("get-user", async (id: number) => {
 const app2 = createLiteRPC()
 	.add("delete-user", async (id: number) => {
 		if (Math.random() > 0.5) {
-			return { id, deleted: true };
+			// return { id, deleted: true };
 		} else {
 			throw new LiteRPCError("INTERNAL_ERROR", "Could not find that user");
 		}

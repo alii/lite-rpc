@@ -134,10 +134,10 @@ export interface LiteRPCApp<M extends Array<AnyMethod>> {
 	 * @param handler A handler for this method to run when called. This handler may only accept 0-1 arguments, and no more.
 	 * @returns A method instance
 	 */
-	add: <Name extends string, Params extends AnyParams, R extends JSONStringifiableValue>(
+	add: <Name extends string, Params extends AnyParams, R extends JSONStringifiableValue | void>(
 		name: Name,
 		handler: (...params: Params) => Promise<R>
-	) => LiteRPCApp<[...M, Method<Name, Params, R>]>;
+	) => LiteRPCApp<[...M, Method<Name, Params, R extends void ? null : R>]>;
 
 	/**
 	 * Array of all attached methods
@@ -163,7 +163,7 @@ export function createLiteRPC<M extends Array<AnyMethod> = []>(
 	methods: M = [] as unknown[] as M
 ): LiteRPCApp<M> {
 	return {
-		add: <Name extends string, Params extends AnyParams, R extends JSONStringifiableValue>(
+		add: <Name extends string, Params extends AnyParams, R extends JSONStringifiableValue | void>(
 			name: Name,
 			handler: (...params: Params) => Promise<R>
 		) => {
@@ -175,7 +175,23 @@ export function createLiteRPC<M extends Array<AnyMethod> = []>(
 				);
 			}
 
-			return createLiteRPC<[...M, Method<Name, Params, R>]>([...methods, { name, handler }]);
+			const next = async (...args: Params): Promise<R extends void ? null : R> => {
+				const result = await handler(...args);
+
+				if (result === undefined) {
+					return null as R extends void ? null : R;
+				}
+
+				return result as R extends void ? null : R;
+			};
+
+			return createLiteRPC<[...M, Method<Name, Params, R extends void ? null : R>]>([
+				...methods,
+				{
+					name,
+					handler: next,
+				},
+			]);
 		},
 
 		methods,
