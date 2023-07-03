@@ -1,0 +1,8 @@
+{
+  "name": "lite-rpc",
+  "version": "1.0.0",
+  "main": "index.js",
+  "repository": "git@github.com:alii/lite-rpc.git",
+  "author": "Alistair Smith <hi@alistair.sh>",
+  "license": "MIT"
+}
