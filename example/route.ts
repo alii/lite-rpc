@@ -1,8 +1,11 @@
-import { LiteRPCError, app, group } from "../src";
+import { z } from "zod";
+import { LiteRPCError, createLiteRPC, type InferMethods } from "../src";
+
+const { group, app } = createLiteRPC<{ executionTime: number }>();
 
 // Groups let you write methods anywhere in your app, and then you
 // merge them into a root group
-const users = group().add("get-user", async (id: number) => {
+const users = group().add("get-user", z.number(), async ({ params: id }) => {
 	if (Math.random() > 0.5) {
 		// Simulate an error
 		throw new LiteRPCError("INTERNAL_ERROR", "Could not find that user");
@@ -18,10 +21,17 @@ const users = group().add("get-user", async (id: number) => {
 // You can add as many methods to a group as you want
 const misc = group()
 	.add("random-number", async () => Math.floor(Math.random() * 10000))
-	.add("hello", async (name: string) => `Hello, ${name}`);
+	.add("hello", z.string(), async ({ params: name }) => `Hello, ${name}`)
+
+	// Access context within a method
+	.add("info", async ({ context }) => context);
+
+const root = group().merge(users).merge(misc);
+
+export type Root = InferMethods<typeof root>;
 
 const example = app({
-	group: group().merge(users).merge(misc),
+	group: root,
 	onError: async error => {
 		return {
 			code: -32000,
@@ -32,12 +42,19 @@ const example = app({
 
 // Process a request, usually you can just pass `req.body`
 // (Feel free to loosely validate it with Zod or something beforehand)
-const response = await example.request({
-	jsonrpc: "2.0",
-	method: "delete-user",
-	params: 1,
-	id: "rpc_sdasdsads",
-});
+const response = await example.request(
+	{
+		jsonrpc: "2.0",
+		method: "delete-user",
+		params: 1,
+		id: "rpc_sdasdsads",
+	},
+
+	// Pass context into the request
+	{
+		executionTime: Date.now(),
+	}
+);
 
 if (response && "result" in response) {
 	response.result;

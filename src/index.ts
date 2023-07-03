@@ -6,14 +6,27 @@ export type JSONStringifiableValue = RootJSONValue<JSONValue | Date>;
 
 export type AnyParams = [] | [params: JSONValue];
 
+export interface Parsable<Out> {
+	parse: (value: unknown) => Out;
+}
+
+export type MethodHandlerData<Context, Params> = {
+	context: Context;
+	params: Params;
+};
+
 export interface Method<
+	Context,
 	Name extends string,
-	Params extends AnyParams,
-	R extends JSONStringifiableValue
+	R extends JSONStringifiableValue,
+	Params extends JSONValue = never
 > {
-	handler: (...params: Params) => Promise<R>;
+	handler: (data: MethodHandlerData<Context, Params>) => Promise<R>;
+	schema: Parsable<Params>;
 	name: Name;
 }
+
+export type AnyMethod = Method<any, string, any, any>;
 
 export type RPCId = `rpc_${string}`;
 
@@ -32,6 +45,18 @@ export type RPCRequest = {
 export type RPCErroredResult = { id: RPCId; error: RPCErrorData };
 export type RPCSuccessfulResult<T> = { id: RPCId; result: T };
 export type RPCResult<T> = RPCErroredResult | RPCSuccessfulResult<T>;
+
+export type InferMethods<T extends LiteRPCGroup<any, AnyMethod[]>> = {
+	[Key in T["methods"][number]["name"]]: {
+		params: Parameters<
+			Extract<T["methods"][number], { name: Key }>["handler"]
+		>[0] extends MethodHandlerData<any, infer P>
+			? P
+			: never;
+
+		result: Awaited<ReturnType<Extract<T["methods"][number], { name: Key }>["handler"]>>;
+	};
+};
 
 export function reply<X, T extends RPCResult<X>>(result: T) {
 	return {
@@ -65,19 +90,37 @@ export class LiteRPCError extends Error {
  * @param app The app instance to find a method from
  * @returns
  */
-export async function process(
+export async function process<Context>(
 	request: RPCRequest,
-	app: LiteRPCApp
+	app: LiteRPCApp<Context>,
+	...[context]: Context extends null ? [] : [context: Context]
 ): Promise<RPCResult<any> | null> {
 	const method = app.config.group.methods.find(p => p.name === request.method);
 
-	const params: AnyParams = request.params === undefined ? [] : [request.params];
+	if (method === undefined) {
+		if (request.id) {
+			return reply({
+				id: request.id,
+				error: {
+					code: RPCErrorCodes.METHOD_NOT_FOUND,
+					message: "Method not found",
+				},
+			});
+		}
+
+		return null;
+	}
+
+	const params = method.schema.parse(request.params);
+
+	const run = method.handler({
+		params,
+		context,
+	});
 
 	if (request.id === undefined) {
 		try {
-			if (method) {
-				await method.handler(...params);
-			}
+			await run;
 		} catch {
 			// Shouldn't do anything here - this is considered a failed "notification"
 			// Which is part of the JSON-RPC spec. See 4.1 of the 2.0 spec
@@ -87,18 +130,8 @@ export async function process(
 		return null;
 	}
 
-	if (!method) {
-		return reply({
-			id: request.id,
-			error: {
-				code: RPCErrorCodes.METHOD_NOT_FOUND,
-				message: "Could not find that method",
-			},
-		});
-	}
-
 	try {
-		const result = await method.handler(...params);
+		const result = await run;
 
 		return reply({
 			id: request.id,
@@ -134,99 +167,123 @@ export async function process(
 	}
 }
 
-export type AnyMethod = Method<string, any, any>;
-
-export interface LiteRPCGroup<M extends Array<AnyMethod>> {
+export interface LiteRPCGroup<Context, M extends Array<AnyMethod>> {
 	/**
 	 * Attach a new method to this app
 	 * @param name The name of the method
 	 * @param handler A handler for this method to run when called. This handler may only accept 0-1 arguments, and no more.
 	 * @returns A method instance
 	 */
-	add: <Name extends string, Params extends AnyParams, R extends JSONStringifiableValue | void>(
+	add: <
+		Name extends string,
+		Params extends JSONValue = null,
+		R extends JSONStringifiableValue | void = void
+	>(
 		name: Name,
-		handler: (...params: Params) => Promise<R>
-	) => LiteRPCGroup<[...M, Method<Name, Params, R extends void ? null : R>]>;
+		...args: Params extends null
+			? [handler: (data: MethodHandlerData<Context, Params>) => Promise<R>]
+			: [
+					schema: Parsable<Params>,
+					handler: (data: MethodHandlerData<Context, Params>) => Promise<R>
+			  ]
+	) => LiteRPCGroup<Context, [...M, Method<Context, Name, R extends void ? null : R, Params>]>;
 
 	/**
 	 * Array of all attached methods
 	 */
 	methods: M;
 
-	merge: <N extends Array<AnyMethod>>(group: LiteRPCGroup<N>) => LiteRPCGroup<[...M, ...N]>;
+	merge: <N extends Array<AnyMethod>>(
+		group: LiteRPCGroup<Context, N>
+	) => LiteRPCGroup<Context, [...M, ...N]>;
 }
 
-export interface LiteRPCApp {
-	config: LiteRPCAppConstructorOptions;
+export interface LiteRPCApp<Context> {
+	config: LiteRPCAppConstructorOptions<Context>;
 
 	/**
 	 * Process an RPC request on a given app instance
 	 * @param request The RPC Request to process
 	 * @returns An RPC Result, or null if the request is considered a "notification"
 	 */
-	request: (request: RPCRequest) => Promise<RPCResult<any> | null>;
+	request: (
+		request: RPCRequest,
+		...context: Context extends null ? [] : [context: Context]
+	) => Promise<RPCResult<any> | null>;
 }
 
-export interface LiteRPCAppConstructorOptions {
+export interface LiteRPCAppConstructorOptions<Context> {
 	onError: (value: Error) => Promise<RPCErrorData>;
-	group: LiteRPCGroup<AnyMethod[]>;
+	group: LiteRPCGroup<Context, AnyMethod[]>;
 }
 
-export function app(config: LiteRPCAppConstructorOptions): LiteRPCApp {
-	const instance: LiteRPCApp = {
-		config,
-		request: request => process(request, instance),
-	};
+export function createLiteRPC<Context = null>() {
+	function app(config: LiteRPCAppConstructorOptions<Context>): LiteRPCApp<Context> {
+		const instance: LiteRPCApp<Context> = {
+			config,
+			request: (request, ...context) => process(request, instance, ...context),
+		};
 
-	return instance;
-}
+		return instance;
+	}
 
-export function group<M extends Array<AnyMethod> = []>(
-	methods: M = [] as unknown[] as M
-): LiteRPCGroup<M> {
-	return {
-		methods,
+	function group<M extends Array<AnyMethod> = []>(
+		methods: M = [] as unknown[] as M
+	): LiteRPCGroup<Context, M> {
+		return {
+			methods,
 
-		add: <Name extends string, Params extends AnyParams, R extends JSONStringifiableValue | void>(
-			name: Name,
-			handler: (...params: Params) => Promise<R>
-		) => {
-			const existing = methods.some(m => m.name === name);
+			add: <
+				Name extends string,
+				Params extends JSONValue = null,
+				R extends JSONStringifiableValue | void = void
+			>(
+				name: Name,
+				...args: Params extends null
+					? [handler: (data: MethodHandlerData<Context, Params>) => Promise<R>]
+					: [
+							schema: Parsable<Params>,
+							handler: (data: MethodHandlerData<Context, Params>) => Promise<R>
+					  ]
+			) => {
+				const existing = methods.some(m => m.name === name);
 
-			if (existing) {
-				throw new Error(
-					`Cannot add method ${name} because a method with that name already exists.`
-				);
-			}
-
-			const next = async (...args: Params): Promise<R extends void ? null : R> => {
-				const result = await handler(...args);
-
-				if (result === undefined) {
-					return null as R extends void ? null : R;
+				if (existing) {
+					throw new Error(
+						`Cannot add method ${name} because a method with that name already exists.`
+					);
 				}
 
-				return result as R extends void ? null : R;
-			};
+				const schema: Parsable<Params> =
+					args.length === 2 ? (args[0] as Parsable<Params>) : { parse: () => null as Params };
 
-			return group<[...M, Method<Name, Params, R extends void ? null : R>]>([
-				...methods,
-				{
-					name,
-					handler: next,
-				},
-			]);
-		},
+				const handler: AnyMethod["handler"] = args.length === 2 ? args[1] : args[0];
 
-		merge: app => {
-			return group([...methods, ...app.methods]);
-		},
-	};
+				return group<[...M, Method<Context, Name, R extends void ? null : R, Params>]>([
+					...methods,
+					{
+						name,
+						schema,
+						handler: async (data): Promise<R extends void ? null : R> => {
+							const result = await handler(data);
+
+							if (result === undefined) {
+								return null as R extends void ? null : R;
+							}
+
+							return result as R extends void ? null : R;
+						},
+					},
+				]);
+			},
+
+			merge: app => {
+				return group([...methods, ...app.methods]);
+			},
+		};
+	}
+
+	return { group, app };
 }
 
-export type InferApp<T extends LiteRPCGroup<AnyMethod[]>> = {
-	[Key in T["methods"][number]["name"]]: {
-		params: Parameters<Extract<T["methods"][number], { name: Key }>["handler"]>;
-		result: Awaited<ReturnType<Extract<T["methods"][number], { name: Key }>["handler"]>>;
-	};
-};
+export const { group, app } = createLiteRPC<null>();
