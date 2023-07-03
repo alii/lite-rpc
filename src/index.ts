@@ -1,6 +1,6 @@
 import { RPCErrorCodes, type RPCErrorCode } from "./errors.ts";
 
-export type RootJSONValue<T> = T | ReadonlyArray<T> | { [key in PropertyKey]: T };
+export type RootJSONValue<T> = T | Array<T> | { [key in PropertyKey]: T };
 export type JSONValue = RootJSONValue<string | boolean | number | null>;
 export type JSONStringifiableValue = RootJSONValue<JSONValue | Date>;
 
