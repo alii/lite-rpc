@@ -67,9 +67,9 @@ export class LiteRPCError extends Error {
  */
 export async function process(
 	request: RPCRequest,
-	methods: LiteRPCApp<AnyMethod[]>["methods"]
+	app: LiteRPCApp
 ): Promise<RPCResult<any> | null> {
-	const method = methods.find(p => p.name === request.method);
+	const method = app.config.group.methods.find(p => p.name === request.method);
 
 	const params: AnyParams = request.params === undefined ? [] : [request.params];
 
@@ -115,6 +115,15 @@ export async function process(
 			});
 		}
 
+		if (e instanceof Error) {
+			const error = await app.config.onError(e);
+
+			return reply({
+				id: request.id,
+				error,
+			});
+		}
+
 		return reply({
 			id: request.id,
 			error: {
@@ -127,7 +136,7 @@ export async function process(
 
 export type AnyMethod = Method<string, any, any>;
 
-export interface LiteRPCApp<M extends Array<AnyMethod>> {
+export interface LiteRPCGroup<M extends Array<AnyMethod>> {
 	/**
 	 * Attach a new method to this app
 	 * @param name The name of the method
@@ -137,32 +146,47 @@ export interface LiteRPCApp<M extends Array<AnyMethod>> {
 	add: <Name extends string, Params extends AnyParams, R extends JSONStringifiableValue | void>(
 		name: Name,
 		handler: (...params: Params) => Promise<R>
-	) => LiteRPCApp<[...M, Method<Name, Params, R extends void ? null : R>]>;
+	) => LiteRPCGroup<[...M, Method<Name, Params, R extends void ? null : R>]>;
 
 	/**
 	 * Array of all attached methods
 	 */
 	methods: M;
 
+	merge: <N extends Array<AnyMethod>>(group: LiteRPCGroup<N>) => LiteRPCGroup<[...M, ...N]>;
+}
+
+export interface LiteRPCApp {
+	config: LiteRPCAppConstructorOptions;
+
 	/**
 	 * Process an RPC request on a given app instance
 	 * @param request The RPC Request to process
 	 * @returns An RPC Result, or null if the request is considered a "notification"
 	 */
-	process: (request: RPCRequest) => Promise<RPCResult<any> | null>;
-
-	execute: <Name extends M[number]["name"]>(
-		name: Name,
-		...params: Parameters<Extract<M[number], { name: Name }>["handler"]>
-	) => Promise<ReturnType<Extract<M[number], { name: Name }>["handler"]>>;
-
-	merge: <N extends Array<AnyMethod>>(app: LiteRPCApp<N>) => LiteRPCApp<[...M, ...N]>;
+	request: (request: RPCRequest) => Promise<RPCResult<any> | null>;
 }
 
-export function createLiteRPC<M extends Array<AnyMethod> = []>(
+export interface LiteRPCAppConstructorOptions {
+	onError: (value: Error) => Promise<RPCErrorData>;
+	group: LiteRPCGroup<AnyMethod[]>;
+}
+
+export function app(config: LiteRPCAppConstructorOptions): LiteRPCApp {
+	const instance: LiteRPCApp = {
+		config,
+		request: request => process(request, instance),
+	};
+
+	return instance;
+}
+
+export function group<M extends Array<AnyMethod> = []>(
 	methods: M = [] as unknown[] as M
-): LiteRPCApp<M> {
+): LiteRPCGroup<M> {
 	return {
+		methods,
+
 		add: <Name extends string, Params extends AnyParams, R extends JSONStringifiableValue | void>(
 			name: Name,
 			handler: (...params: Params) => Promise<R>
@@ -185,7 +209,7 @@ export function createLiteRPC<M extends Array<AnyMethod> = []>(
 				return result as R extends void ? null : R;
 			};
 
-			return createLiteRPC<[...M, Method<Name, Params, R extends void ? null : R>]>([
+			return group<[...M, Method<Name, Params, R extends void ? null : R>]>([
 				...methods,
 				{
 					name,
@@ -194,24 +218,13 @@ export function createLiteRPC<M extends Array<AnyMethod> = []>(
 			]);
 		},
 
-		methods,
-
-		process: request => {
-			return process(request, methods);
-		},
-
-		execute: async (name, ...params) => {
-			const method = methods.find(method => method.name === name);
-			return method?.handler(...(params as AnyParams));
-		},
-
 		merge: app => {
-			return createLiteRPC([...methods, ...app.methods]);
+			return group([...methods, ...app.methods]);
 		},
 	};
 }
 
-export type InferApp<T extends LiteRPCApp<AnyMethod[]>> = {
+export type InferApp<T extends LiteRPCGroup<AnyMethod[]>> = {
 	[Key in T["methods"][number]["name"]]: {
 		params: Parameters<Extract<T["methods"][number], { name: Key }>["handler"]>;
 		result: Awaited<ReturnType<Extract<T["methods"][number], { name: Key }>["handler"]>>;

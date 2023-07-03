@@ -7,28 +7,41 @@ Micro transportless JSON-RPC framework aimed for use with TypeScript
 `yarn add lite-rpc`
 
 ```typescript
-import { LiteRPCError, createLiteRPC, type InferApp } from "lite-rpc";
+import { LiteRPCError, app, group } from "lite-rpc";
 
-const app = createLiteRPC()
-	.add("delete-user", async (id: number) => {
-		const user = await db.getUser(id);
+// Groups let you write methods anywhere in your app, and then you
+// merge them into a root group
+const users = group().add("get-user", async (id: number) => {
+	if (Math.random() > 0.5) {
+		// Simulate an error
+		throw new LiteRPCError("INTERNAL_ERROR", "Could not find that user");
+	}
 
-		if (!user) {
-			throw new LiteRPCError("INTERNAL_ERROR", "Could not find that user");
-		}
+	return {
+		id,
+		name: "Alistair",
+	};
+});
 
-		await user.delete();
-	})
-	.add("random-number", async () => Math.floor(Math.random() * 10000));
+// Another group, for misc methods.
+// You can add as many methods to a group as you want
+const misc = group()
+	.add("random-number", async () => Math.floor(Math.random() * 10000))
+	.add("hello", async (name: string) => `Hello, ${name}`);
 
-const otherApp = createLiteRPC().add("hello", async (name: string) => `Hello, ${name}`);
+const example = app({
+	group: group().merge(users).merge(misc),
+	onError: async error => {
+		return {
+			code: -32000,
+			message: error.message,
+		};
+	},
+});
 
-const final = otherApp.merge(app);
-
-// Later on in your code, however you want to do a trarnsport
-
+// Later on in your code, however you want to do a transport (this is an example with HTTP)
 expressApp.post("/rpc", async (req, res) => {
-	const result = await final.process(req.body);
+	const result = await example.request(req.body);
 
 	// Result is null if the rpc request was a notification
 	// See JSON-RPC 2.0 spec for more info about notifications

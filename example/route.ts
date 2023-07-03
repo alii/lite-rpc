@@ -1,33 +1,38 @@
-import { LiteRPCError, createLiteRPC, type InferApp } from "../src";
+import { LiteRPCError, app, group } from "../src";
 
-const app = createLiteRPC().add("get-user", async (id: number) => {
+// Groups let you write methods anywhere in your app, and then you
+// merge them into a root group
+const users = group().add("get-user", async (id: number) => {
 	if (Math.random() > 0.5) {
-		return {
-			id,
-			name: "Alistair",
-		};
-	} else {
+		// Simulate an error
 		throw new LiteRPCError("INTERNAL_ERROR", "Could not find that user");
 	}
+
+	return {
+		id,
+		name: "Alistair",
+	};
 });
 
-const app2 = createLiteRPC()
-	.add("delete-user", async (id: number) => {
-		if (Math.random() > 0.5) {
-			// return { id, deleted: true };
-		} else {
-			throw new LiteRPCError("INTERNAL_ERROR", "Could not find that user");
-		}
-	})
-	.add("random-number", async () => Math.floor(Math.random() * 10000));
+// Another group, for misc methods.
+// You can add as many methods to a group as you want
+const misc = group()
+	.add("random-number", async () => Math.floor(Math.random() * 10000))
+	.add("hello", async (name: string) => `Hello, ${name}`);
 
-const final = app.merge(app2);
-
-export type App = InferApp<typeof final>;
+const example = app({
+	group: group().merge(users).merge(misc),
+	onError: async error => {
+		return {
+			code: -32000,
+			message: error.message,
+		};
+	},
+});
 
 // Process a request, usually you can just pass `req.body`
 // (Feel free to loosely validate it with Zod or something beforehand)
-const response = await final.process({
+const response = await example.request({
 	jsonrpc: "2.0",
 	method: "delete-user",
 	params: 1,
