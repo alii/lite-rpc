@@ -213,7 +213,7 @@ export function createLiteRPC<M extends Array<AnyMethod> = []>(
 
 export type InferApp<T extends LiteRPCApp<AnyMethod[]>> = {
 	[Key in T["methods"][number]["name"]]: {
-		params: Parameters<Extract<T["methods"][number], { name: Key }>["handler"]>[0];
+		params: Parameters<Extract<T["methods"][number], { name: Key }>["handler"]>;
 		result: Awaited<ReturnType<Extract<T["methods"][number], { name: Key }>["handler"]>>;
 	};
 };
