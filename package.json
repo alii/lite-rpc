@@ -1,8 +1,38 @@
 {
-  "name": "lite-rpc",
-  "version": "1.0.0",
-  "main": "index.js",
-  "repository": "git@github.com:alii/lite-rpc.git",
-  "author": "Alistair Smith <hi@alistair.sh>",
-  "license": "MIT"
+	"name": "lite-rpc",
+	"version": "0.0.1",
+	"type": "module",
+	"main": "./dist/index.cjs",
+	"module": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		"./package.json": "./package.json",
+		".": {
+			"import": "./dist/index.js",
+			"require": "./dist/index.cjs"
+		}
+	},
+	"repository": "https://github.com/alii/lite-rpc.git",
+	"homepage": "https://alistair.sh",
+	"author": "Alistair Smith <hi@alistair.sh>",
+	"license": "Apache-2.0",
+	"sideEffects": false,
+	"packageManager": "yarn@3.6.1",
+	"publishConfig": {
+		"access": "public"
+	},
+	"files": [
+		"dist",
+		"LICENSE",
+		"README.md",
+		"package.json"
+	],
+	"scripts": {
+		"build": "tsup src/index.ts --dts --format esm,cjs",
+		"release": "yarn build && yarn npm publish"
+	},
+	"devDependencies": {
+		"tsup": "^7.1.0",
+		"typescript": "^5.1.6"
+	}
 }
